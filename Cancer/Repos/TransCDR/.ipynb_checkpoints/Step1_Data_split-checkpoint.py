@@ -18,6 +18,7 @@ args = parser.parse_args()
 if args.model_type == 'regression':
     CDR = pd.read_csv('./data/GDSC/data_processed/CDR_n156813.txt',sep='\t',index_col=0)
     CDR = shuffle(CDR,random_state=2022) 
+
 if args.model_type == 'classification':
     from random import sample
     CDR = pd.read_csv('./data/GDSC/data_processed/CDR_bi_n154603.txt',sep='\t',index_col=0)
@@ -270,6 +271,7 @@ if args.scenarios == 'cold cell & drug':
             train_set.to_csv(result_folder+'/train.txt',sep='\t',index=False)
             test_set.to_csv(result_folder+'/test.txt',sep='\t',index=False)
             val_set.to_csv(result_folder+'/val.txt',sep='\t',index=False)
+
 
 if args.scenarios == 'cold cell & scaffold':
     for i in range(1,11):
