@@ -5,7 +5,6 @@ from sklearn.model_selection import KFold
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from rdkit.Chem.Scaffolds import MurckoScaffold
 import argparse
 
 from umap_clustering import umap_clustering_best, get_mfp
@@ -14,17 +13,6 @@ parser = argparse.ArgumentParser(description='Data segmentation strategies')
 parser.add_argument('--dataset', type=str, required=False,help='gdsc, nci60, combined')
 parser.add_argument('--result_folder', type=str, required=True, help='The save path of CV10 data')
 args = parser.parse_args()
-
-def generate_scaffold(smiles, include_chirality=False):
-    """
-    Obtain assert from smiles
-    :param smiles:
-    :param include_chirality:
-    :return: smiles of scaffold
-    """
-    scaffold = MurckoScaffold.MurckoScaffoldSmiles(
-        smiles=smiles, includeChirality=include_chirality)
-    return scaffold
 
 def save(output_folder, train, test, val):
     folder_path = os.path.join(args.result_folder, output_folder)
@@ -54,13 +42,28 @@ def merge_with(train, test, val, other, on):
     val = pd.merge(val, other, on=on)
     return train, test, val
 
-CDR = pd.read_csv('./data/gdsc1_cdr_preprocess.csv')
+if args.dataset == 'gdsc':
+    gdsc1 = pd.read_csv('./data/processed/gdsc1_cdr.csv')
+    gdsc2 = pd.read_csv('./data/processed/gdsc2_cdr.csv')
+    CDR = pd.concat([gdsc1, gdsc2], axis=0)
+elif args.dataset == 'nci60':
+    CDR = pd.read_csv('./data/processed/nci_cdr.csv')
+elif args.dataset == 'combined':
+    gdsc1 = pd.read_csv('./data/processed/gdsc1_cdr.csv')
+    gdsc2 = pd.read_csv('./data/processed/gdsc2_cdr.csv')
+    nci = pd.read_csv('./data/processed/nci_cdr.csv')
+    CDR = pd.concat([gdsc1, gdsc2, nci], axis=0)
+else:
+    raise ValueError('Invalid dataset')
 CDR = shuffle(CDR, random_state=0)
 
-cell_info = pd.read_csv('./data/cell_info.csv')
-methylation = pd.read_csv('./data/methylation.csv',index_col=0)
-genetic = pd.read_csv('./data/genetic.txt',sep='\t',index_col=0)
-expression = pd.read_csv('./data/expression.csv',index_col=0)
+used_cell_lines = CDR['cell_line'].unique()
+cell_info = pd.read_csv('./data/processed/cell_info.csv')
+cell_info = cell_info[cell_info['cell_type'].isin(used_cell_lines)]
+
+methylation = pd.read_csv('./data/processed/methylation.csv',index_col=0)
+genetic = pd.read_csv('./data/processed/genetic.csv',sep='\t',index_col=0)
+expression = pd.read_csv('./data/processed/expression.csv',index_col=0)
 
 methylation.columns = [name.split('.')[0][1:] for name in methylation.columns.values]
 methylation = methylation.T
