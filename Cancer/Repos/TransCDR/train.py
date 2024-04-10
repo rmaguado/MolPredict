@@ -15,7 +15,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='CV10 of TransCDR')
 parser.add_argument('--device', type=str, required=True, help='cpu, cuda, cuda:0')
-parser.add_argument('--data_path', type=str, required=True, help='the data path of CV10 data')
+parser.add_argument('--data_path', type=str, required=True, help='the data path of CV folder.')
 parser.add_argument('--omics', type=str, required=True, help='expr, mutation, methylation, expr + mutation, expr + methylation, mutation + methylation, expr + mutation + methylation')
 parser.add_argument('--input_dim_drug', type=int, required=True, help='seq_model: 768, graph_model: 300')
 parser.add_argument('--lr', type=float, required=True, help='Learning rate')
@@ -35,14 +35,7 @@ for i in range(10):
     train = pd.read_csv(args.data_path + f'/fold{i}/train.csv')
     test = pd.read_csv(args.data_path + f'/fold{i}/test.csv')
     val = pd.read_csv(args.data_path + f'/fold{i}/val.csv')
-    if args.conformal_prediction == 'True':
-        train_error = pd.read_csv(args.data_path + f'/error/fold{i}/train.csv')
-        test_error = pd.read_csv(args.data_path + f'/error/fold{i}/test.csv')
-        val_error = pd.read_csv(args.data_path + f'/error/fold{i}/val.csv')
-        train = pd.concat([train, train_error], axis=1)
-        test = pd.concat([test, test_error], axis=1)
-        val = pd.concat([val, val_error], axis=1)
-        
+    
     config = {
         'device': args.device,
         'omics': args.omics, # expr + mutation + methylation

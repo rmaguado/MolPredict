@@ -57,10 +57,13 @@ class DataEncoding:
             testdata['drug_encoding'] = [uniq_smile_dict[i] for i in testdata['smiles']]
             valdata['drug_encoding'] = [uniq_smile_dict[i] for i in valdata['smiles']]
             if self.config['conformal_prediction'] == 'True':
-                data_label = 'error'
+                traindata = traindata.drop(columns={"Label"})
+                testdata = testdata.drop(columns={"Label"})
+                valdata = valdata.drop(columns={"Label"})
+                data_label = 'Residual'
             else:
                 data_label = 'pIC50'
-                
+            
             traindata = pd.merge(traindata, cell_info, how='left', on='cell_line')
             testdata = pd.merge(testdata, cell_info, how='left', on='cell_line')
             valdata = pd.merge(valdata, cell_info, how='left', on='cell_line')

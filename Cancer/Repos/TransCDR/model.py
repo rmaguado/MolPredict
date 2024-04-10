@@ -200,7 +200,7 @@ class data_process_loader(data.Dataset):
             self.mrna = pd.read_csv('../../Data/processed/expression.csv',index_col=0)
             self.mrna = self.mrna.T
         
-        if self.config['pre_train'] == 'True':
+        if self.config['pre_train']:
             self.embedded_drug1 = get_sequence_feats(drug_df, **self.config)
             self.embedded_drug2 = get_graph_feats(drug_df, **self.config)
             self.embedded_drug3 = get_FP_feats(drug_df, **self.config)
@@ -226,7 +226,7 @@ class data_process_loader(data.Dataset):
             v_genetic = np.array(self.genetic.loc[int(self.drug_df.iloc[index]['COSMIC_ID']),:])
             v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_line'],:])
         
-        if self.config['pre_train'] == 'True':
+        if self.config['pre_train']:
             v_d1 = self.embedded_drug1[self.drug_df.iloc[index]['smiles']]
             v_d2 = self.embedded_drug2[self.drug_df.iloc[index]['smiles']]
             v_d3 = self.embedded_drug3[self.drug_df.iloc[index]['smiles']]
@@ -302,7 +302,7 @@ class Classifier(nn.Sequential):
             self.fusion = Decoder(256,256, 256, 8, 6, 0.1, self.device)
             
         self.hidden_dims =  [1024, 1024, 512]
-        if self.config['pre_train'] == 'True':
+        if self.config['pre_train']:
             if self.config['fusion_type'] =='decoder':
                 dims = [256*3] + self.hidden_dims + [1]
             else:
@@ -321,7 +321,7 @@ class Classifier(nn.Sequential):
         # label
         label = v[-1]
 
-        if self.config['pre_train'] == 'True':
+        if self.config['pre_train']:
             if self.config['fusion_type'] in ['encoder','decoder']:
                 # drug
                 v_seq = v[0].to(self.device)
@@ -454,8 +454,8 @@ class TransCDR:
         y_label = []
         y_pred = []
         model.eval()
-        for i, v in enumerate(datagenerator):
-            score,label = model(v)
+        for i, v in tqdm(enumerate(datagenerator), total=len(datagenerator)):
+            score, label = model(v)
             loss_fct = torch.nn.MSELoss()
             n = torch.squeeze(score, 1)
             loss = loss_fct(n, Variable(torch.from_numpy(np.array(label)).float()).to(self.device))
@@ -595,6 +595,7 @@ class TransCDR:
         # load early stopped model
         self.model = model_max
         
+        print('******** predicting... ********')
         # make predictions for train
         train_predictions, _ = self.predict(train_drug, train_loader)
         train_predictions.to_csv(os.path.join(self.modeldir, "train_predictions.csv"), index=False)
@@ -653,22 +654,24 @@ class TransCDR:
         tf.close()
 
     def predict(self, drug_data, data_loader):
-        print('******** predicting... ********')
         prediction_data = drug_data.copy()
         self.model.to(self.device)
-        params = {'batch_size': 16,
+        params = {'batch_size': self.config['BATCH_SIZE'],
                   'shuffle': False,
                   'num_workers': 8,
                   'drop_last': False,
                   'sampler': SequentialSampler(data_loader)}
         generator = data.DataLoader(data_loader, **params)
-        
         y_label, y_pred, mse, rmse, person, p_val, spearman, s_p_val, CI, loss_val = \
             self.test(generator, self.model)
         
+        y_label = np.array(y_label)
+        y_pred = np.array(y_pred)
+        
         prediction_data['Prediction'] = y_pred
         prediction_data['Residual'] = y_label - y_pred
-        
+        columns = ["cell_line", "smiles", "Label", "Prediction", "Residual"]
+        prediction_data = prediction_data[columns]
         return prediction_data, (mse, rmse, person, p_val, spearman, s_p_val, CI)
 
     def save_model(self):
