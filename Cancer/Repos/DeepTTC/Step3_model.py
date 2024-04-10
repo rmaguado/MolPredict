@@ -185,21 +185,6 @@ class DeepTTC:
         training_generator = data.DataLoader(data_process_loader(
             train_drug.index.values, train_drug.Label.values, train_drug, train_rna), **params)
         
-
-
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
         validation_generator = data.DataLoader(data_process_loader(
             val_drug.index.values, val_drug.Label.values, val_drug, val_rna), **params)
 
@@ -345,6 +330,3 @@ if __name__ == '__main__':
               val_drug=testdata, val_rna=test_rnadata)
     net.save_model()
     print("Model Saved :{}".format(modelfile))
-
-
-

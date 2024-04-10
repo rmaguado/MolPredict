@@ -10,7 +10,7 @@ def CDR_prediction(drug):
     response = CDR.drop_duplicates(subset=['COSMIC_ID','cell_type','assay_name'])
     response = response.reset_index(drop=True)
     response['smiles'] = drug
-    response['Label'] = np.random.rand(855)  
+    response['Label'] = np.random.rand(855)
     config = {
         'model_type':'regression', # classification, regression
         'omics':'expr + mutation + methylation', # expr + mutation + methylation

@@ -15,11 +15,10 @@ import json
 from sklearn.metrics import mean_squared_error
 from lifelines.utils import concordance_index
 from scipy.stats import pearsonr,spearmanr
-from sklearn.metrics import mean_squared_error, roc_auc_score, average_precision_score, f1_score, log_loss
+from sklearn.metrics import mean_squared_error
 import copy
 import time
 import pickle
-import dgl
 import torch
 from torch.utils import data
 import torch.nn.functional as F
@@ -35,13 +34,16 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from dgllife.model import load_pretrained
 from dgl.nn.pytorch.glob import AvgPooling
-from transformers import BertModel, BertTokenizer, AutoTokenizer, AutoModel
+from transformers import AutoModel
 #import sys
 #sys.path.append('./code/cross_att_clas_regr')
-from model_helper import MultiHeadAttention,Encoder,Decoder,CNN,RNN,Transformer,GCN_encoder,NeuralFP, AttentiveFP
+from model_helper import Encoder,Decoder,CNN,RNN,Transformer,GCN_encoder,NeuralFP, AttentiveFP
 from drug_bert_model import LigandTokenizer, embed_ligand
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+from transformers import logging
+logging.set_verbosity_error()
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # get sequence feats with pre-trained BERT model
 def get_sequence_feats(drug_df,**config):
@@ -58,6 +60,7 @@ def get_sequence_feats(drug_df,**config):
 
 # get graph feats with pre-trained GIN model
 def get_graph_feats(drug_df,**config):
+    device = torch.device(config["device"])
     model_drug = load_pretrained(config['graph_model'])
     readout = AvgPooling()
     model_drug.eval()
@@ -130,10 +133,10 @@ def drug_2_embed(drug_df):
 # transformer
 from subword_nmt.apply_bpe import BPE # Byte-Pair-Encoder
 import codecs
-vocab_path = './data/ESPF/drug_codes_chembl_freq_1500.txt'
+vocab_path = './ESPF/drug_codes_chembl_freq_1500.txt'
 bpe_codes_drug = codecs.open(vocab_path)
 dbpe = BPE(bpe_codes_drug, merges=-1, separator='')
-sub_csv = pd.read_csv('./data/ESPF/subword_units_map_chembl_freq_1500.csv')
+sub_csv = pd.read_csv('./ESPF/subword_units_map_chembl_freq_1500.csv')
 idx2word_d = sub_csv['index'].values
 words2idx_d = dict(zip(idx2word_d, range(0, len(idx2word_d))))
 
@@ -188,38 +191,16 @@ class data_process_loader(data.Dataset):
         self.labels = labels
         self.list_IDs = list_IDs
         self.drug_df = drug_df
-        if self.config['screening'] == 'TCGA':
-            cancer_type = self.config['cancer_type']
-            self.rna_data = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix_screening/'+cancer_type+'/EG_tcga_scale.csv',index_col=0)
-            # self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
+        
+        if self.config['external_dataset'] == 'None':
+            self.rna_data = pd.read_csv('../../Data/processed/methylation.csv', index_col=0)
+            self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
             self.rna_data = self.rna_data.T
-            self.genetic = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix_screening/'+cancer_type+'/MC_tcga_scale.csv',index_col=0)
-            self.genetic = self.genetic.T
-            self.mrna = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix_screening/'+cancer_type+'/DM_tcga_scale.csv',index_col=0)
+            self.genetic = pd.read_csv('../../Data/processed/genetic.csv',index_col=0)
+            self.mrna = pd.read_csv('../../Data/processed/expression.csv',index_col=0)
             self.mrna = self.mrna.T
-        else:
-            if self.config['external_dataset'] == 'None':
-                self.rna_data = pd.read_csv('./data/GDSC/data_processed/RNA_n18451_1018_zscore.csv',index_col=0)
-                self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
-                self.rna_data = self.rna_data.T
-                self.genetic = pd.read_csv('./data/GDSC/data_processed/Genetic_features_n969_735.txt',sep='\t',index_col=0)
-                self.mrna = pd.read_csv('./data/GDSC/data_processed/mrna_n20617_1028_zscore.csv',index_col=0)
-                self.mrna = self.mrna.T
-            if self.config['external_dataset'] == 'TCGA':
-                self.rna_data = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix/EG_tcga_scale.csv',index_col=0)
-                # self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
-                self.rna_data = self.rna_data.T
-                self.genetic = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix/MC_tcga.csv',index_col=0)
-                self.genetic = self.genetic.T
-                self.mrna = pd.read_csv('./data/TCGA/omics_TCGA/processed_matrix/DM_tcga_scale.csv',index_col=0)
-                self.mrna = self.mrna.T
-            if self.config['external_dataset'] == 'CCLE':
-                self.rna_data = pd.read_csv('./data/CCLE/data_processed/to_GDSC_form2/EG_scale.csv',index_col=0)
-                self.rna_data = self.rna_data.T
-                self.genetic = pd.read_csv('./data/CCLE/data_processed/to_GDSC_form2/MC.csv',index_col=0)
-                self.mrna = pd.read_csv('./data/CCLE/data_processed/to_GDSC_form2/DM_scale.csv',index_col=0)
-                self.mrna = self.mrna.T
-        if self.config['pre_train']:
+        
+        if self.config['pre_train'] == 'True':
             self.embedded_drug1 = get_sequence_feats(drug_df, **self.config)
             self.embedded_drug2 = get_graph_feats(drug_df, **self.config)
             self.embedded_drug3 = get_FP_feats(drug_df, **self.config)
@@ -239,24 +220,13 @@ class data_process_loader(data.Dataset):
         'Generates one sample of data'
         index = self.list_IDs[index]
         y = self.labels[index]
-        if self.config['screening'] == 'TCGA':
-            v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['patient.arr'],:])
-            v_genetic = np.array(self.genetic.loc[self.drug_df.iloc[index]['patient.arr'],:])
-            v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['patient.arr'],:])
-        else:
-            if self.config['external_dataset'] == 'None':
-                v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['assay_name'],:])
-                v_genetic = np.array(self.genetic.loc[int(self.drug_df.iloc[index]['COSMIC_ID']),:])
-                v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_type'],:])
-            if self.config['external_dataset'] == 'TCGA':
-                v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['patient.arr'],:])
-                v_genetic = np.array(self.genetic.loc[self.drug_df.iloc[index]['patient.arr'],:])
-                v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['patient.arr'],:])
-            if self.config['external_dataset'] == 'CCLE':
-                v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['DepMap_ID'],:])
-                v_genetic = np.array(self.genetic.loc[self.drug_df.iloc[index]['cell_lines'],:])
-                v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_lines'],:])
-        if self.config['pre_train']:
+        
+        if self.config['external_dataset'] == 'None':
+            v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['assay_name'],:])
+            v_genetic = np.array(self.genetic.loc[int(self.drug_df.iloc[index]['COSMIC_ID']),:])
+            v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_line'],:])
+        
+        if self.config['pre_train'] == 'True':
             v_d1 = self.embedded_drug1[self.drug_df.iloc[index]['smiles']]
             v_d2 = self.embedded_drug2[self.drug_df.iloc[index]['smiles']]
             v_d3 = self.embedded_drug3[self.drug_df.iloc[index]['smiles']]
@@ -270,10 +240,10 @@ class data_process_loader(data.Dataset):
                 mask = self.mask[self.drug_df.iloc[index]['smiles']]
                 return (v_d,mask),v_rna, v_genetic, v_mrna, y
 
-
 class MLP(nn.Sequential):
-    def __init__(self,input_dim_gene):
+    def __init__(self,input_dim_gene, device):
         self.input_dim_gene = input_dim_gene
+        self.device = device
         hidden_dim_gene = 256
         mlp_hidden_dims_gene = [1024, 512]
         super(MLP, self).__init__()
@@ -282,7 +252,7 @@ class MLP(nn.Sequential):
         self.predictor = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(layer_size)])
     def forward(self, v):
         # predict
-        v = v.float().to(device)
+        v = v.float().to(self.device)
         for i, l in enumerate(self.predictor):
             v = F.relu(l(v))
         return v
@@ -292,16 +262,17 @@ class Classifier(nn.Sequential):
     def __init__(self, **config):
         super(Classifier, self).__init__()
         self.config = config
+        self.device = torch.device(config["device"])
         
         # pretrained models
-        self.model_seq = MLP(768)
-        self.model_graph = MLP(300)
-        self.model_fp = MLP(1024)
+        self.model_seq = MLP(768, self.device)
+        self.model_graph = MLP(300, self.device)
+        self.model_fp = MLP(1024, self.device)
 
         # cell line model
-        self.model_rna = MLP(self.config['input_dim_rna'])
-        self.model_genetic = MLP(self.config['input_dim_genetic'])
-        self.model_mrna = MLP(self.config['input_dim_mrna'])
+        self.model_rna = MLP(self.config['input_dim_rna'], self.device)
+        self.model_genetic = MLP(self.config['input_dim_genetic'], self.device)
+        self.model_mrna = MLP(self.config['input_dim_mrna'], self.device)
 
         # drug_encoder
         if self.config['drug_encoder'] == 'CNN':
@@ -325,13 +296,13 @@ class Classifier(nn.Sequential):
         # self.fusion = MultiHeadAttention(256, 8)
         # self.fusion = Encoder(256, 256, 8, 4, 0.1, device)
         if self.config['fusion_type'] =='encoder':
-            self.fusion = Encoder(256, 256, 8, 6, 0.1, device)
+            self.fusion = Encoder(256, 256, 8, 6, 0.1, self.device)
         
         if self.config['fusion_type'] =='decoder':
-            self.fusion = Decoder(256,256, 256, 8, 6, 0.1, device)
+            self.fusion = Decoder(256,256, 256, 8, 6, 0.1, self.device)
             
         self.hidden_dims =  [1024, 1024, 512]
-        if self.config['pre_train']:
+        if self.config['pre_train'] == 'True':
             if self.config['fusion_type'] =='decoder':
                 dims = [256*3] + self.hidden_dims + [1]
             else:
@@ -350,14 +321,14 @@ class Classifier(nn.Sequential):
         # label
         label = v[-1]
 
-        if self.config['pre_train']:
+        if self.config['pre_train'] == 'True':
             if self.config['fusion_type'] in ['encoder','decoder']:
                 # drug
-                v_seq = v[0].to(device)
+                v_seq = v[0].to(self.device)
                 v_seq = self.model_seq(v_seq)
-                v_graph = v[1].to(device)
+                v_graph = v[1].to(self.device)
                 v_graph = self.model_graph(v_graph)
-                v_fp = v[2].to(device)
+                v_fp = v[2].to(self.device)
                 v_fp = self.model_fp(v_fp)
                 # unsquence
                 v_seq = v_seq.unsqueeze(1)
@@ -374,11 +345,11 @@ class Classifier(nn.Sequential):
                 v_mrna = v_mrna.unsqueeze(1)
             else:
                 #  drug
-                v_seq = v[0].to(device)
+                v_seq = v[0].to(self.device)
                 v_seq = self.model_seq(v_seq)
-                v_graph = v[1].to(device)
+                v_graph = v[1].to(self.device)
                 v_graph = self.model_graph(v_graph)
-                v_fp = v[2].to(device)
+                v_fp = v[2].to(self.device)
                 v_fp = self.model_fp(v_fp)
                 
                 # cell line
@@ -429,14 +400,14 @@ class Classifier(nn.Sequential):
 
             if self.config['drug_encoder'] in ['CNN','RNN','GCN','NeuralFP','AttentiveFP']:
                 # drug 
-                v_D = v[0].to(device)
+                v_D = v[0].to(self.device)
                 v_D = self.drug_model(v_D)
                 v_D = v_D.unsqueeze(1)
             
             if self.config['drug_encoder'] == 'Transformer':
                 v_D = v[0]
-                v_D = v_D[0].to(device)
-                mask = v_D[1].to(device)
+                v_D = v_D[0].to(self.device)
+                mask = v_D[1].to(self.device)
                 v_D = self.drug_model(v_D,mask)
                 v_D = v_D.unsqueeze(1)
         
@@ -476,7 +447,7 @@ class TransCDR:
         self.modeldir = config['modeldir']
         if not os.path.exists(self.modeldir):
             os.makedirs(self.modeldir)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device(self.config['device'])
         self.pkl_file = os.path.join(self.modeldir, "loss_curve_iter.pkl")
 
     def test(self,datagenerator,model):
@@ -485,15 +456,10 @@ class TransCDR:
         model.eval()
         for i, v in enumerate(datagenerator):
             score,label = model(v)
-            if self.config['model_type'] == 'regression':
-                loss_fct = torch.nn.MSELoss()
-                n = torch.squeeze(score, 1)
-                loss = loss_fct(n, Variable(torch.from_numpy(np.array(label)).float()).to(self.device))
-                logits = torch.squeeze(score).detach().cpu().numpy()
-            
-            if self.config['model_type'] == 'classification':
-                m = torch.nn.Sigmoid()
-                logits = torch.squeeze(m(score)).detach().cpu().numpy()
+            loss_fct = torch.nn.MSELoss()
+            n = torch.squeeze(score, 1)
+            loss = loss_fct(n, Variable(torch.from_numpy(np.array(label)).float()).to(self.device))
+            logits = torch.squeeze(score).detach().cpu().numpy()
 
             label_ids = label.to('cpu').numpy()
             y_label = y_label + label_ids.flatten().tolist()
@@ -502,22 +468,17 @@ class TransCDR:
 
         model.train()
 
-        if self.config['model_type'] == 'regression':
-            return y_label, y_pred, \
-                mean_squared_error(y_label, y_pred), \
-                np.sqrt(mean_squared_error(y_label, y_pred)), \
-                pearsonr(y_label, y_pred)[0], \
-                pearsonr(y_label, y_pred)[1], \
-                spearmanr(y_label, y_pred)[0], \
-                spearmanr(y_label, y_pred)[1], \
-                concordance_index(y_label, y_pred), \
-                loss
-        if self.config['model_type'] == 'classification':
-            return roc_auc_score(y_label, y_pred), \
-                average_precision_score(y_label, y_pred), \
-                f1_score(y_label, outputs), \
-                log_loss(y_label, outputs), \
-                y_pred,y_label
+        
+        return y_label, y_pred, \
+            mean_squared_error(y_label, y_pred), \
+            np.sqrt(mean_squared_error(y_label, y_pred)), \
+            pearsonr(y_label, y_pred)[0], \
+            pearsonr(y_label, y_pred)[1], \
+            spearmanr(y_label, y_pred)[0], \
+            spearmanr(y_label, y_pred)[1], \
+            concordance_index(y_label, y_pred), \
+            loss
+
 
     def train(self, train_drug, test_drug, val_drug):
         lr = self.config['lr']
@@ -538,26 +499,28 @@ class TransCDR:
         if self.config['drug_encoder'] in ['GCN','NeuralFP','AttentiveFP']:
             params['collate_fn'] = dgl_collate_func
 
-        training_generator = data.DataLoader(data_process_loader(
-            train_drug.index.values, train_drug.Label.values, train_drug,**self.config), **params)
+        train_loader = data_process_loader(
+            train_drug.index.values, train_drug.Label.values, train_drug,
+        **self.config)
+        training_generator = data.DataLoader(train_loader, **params)
+
         if test_drug is not None:
-            testing_generator = data.DataLoader(data_process_loader(
-                test_drug.index.values, test_drug.Label.values, test_drug,**self.config), **params)
+            test_loader = data_process_loader(
+                test_drug.index.values, test_drug.Label.values, test_drug,
+            **self.config)
+            testing_generator = data.DataLoader(test_loader, **params)
         if val_drug is not None:
-            validation_generator = data.DataLoader(data_process_loader(
-                val_drug.index.values, val_drug.Label.values, val_drug,**self.config), **params)
+            val_loader = data_process_loader(
+                val_drug.index.values, val_drug.Label.values, val_drug,
+            **self.config)
+            validation_generator = data.DataLoader(val_loader, **params)
 
         valid_metric_record = []
-        if self.config['model_type'] == 'regression':
-            max_MSE = 10000
-            valid_metric_header = ['# epoch',"MSE", 'RMSE',
-                                "Pearson Correlation", "with p-value",
-                                'Spearman Correlation',"with p-value2",
-                                "Concordance Index"]
-
-        if self.config['model_type'] == 'classification':
-            max_auc = 0
-            valid_metric_header = ['# epoch',"AUROC", "AUPRC", "F1"]
+        max_MSE = 10000
+        valid_metric_header = ['# epoch',"MSE", 'RMSE',
+                            "Pearson Correlation", "with p-value",
+                            'Spearman Correlation',"with p-value2",
+                            "Concordance Index"]
         
         model_max = copy.deepcopy(self.model)
         table = PrettyTable(valid_metric_header)
@@ -573,16 +536,9 @@ class TransCDR:
                 score, label = self.model(v)
                 label = Variable(torch.from_numpy(np.array(label))).float().to(self.device)
                 
-                if self.config['model_type'] == 'regression':
-                    loss_fct = torch.nn.MSELoss()
-                    n = torch.squeeze(score, 1).float()
-                    loss = loss_fct(n, label)
-                
-                if self.config['model_type'] == 'classification':
-                    loss_fct = torch.nn.BCELoss()
-                    m = torch.nn.Sigmoid()
-                    n = torch.squeeze(m(score), 1)
-                    loss = loss_fct(n, label)
+                loss_fct = torch.nn.MSELoss()
+                n = torch.squeeze(score, 1).float()
+                loss = loss_fct(n, label)
 
                 loss_history.append(loss.item())
                 writer.add_scalar("Loss/train", loss.item(), iteration_loss)
@@ -599,64 +555,60 @@ class TransCDR:
                           ". Total time " + str(int(t_now - t_start) / 3600)[:7] + " hours")
             if val_drug is not None:
                 with torch.set_grad_enabled(False):
-                    if self.config['model_type'] == 'regression':
-                        ### regression: MSE, Pearson Correlation, with p-value, Concordance Index
-                        y_true,y_pred, mse, rmse, \
-                        person, p_val, \
-                        spearman, s_p_val, CI,\
-                        loss_val = self.test(validation_generator, self.model)
-                        lst = ["epoch " + str(epo)] + list(map(float2str, [mse, rmse, person, p_val, spearman,
-                                                                        s_p_val, CI]))
-                        valid_metric_record.append(lst)
-                        print('Validation at Epoch ' + str(epo + 1) +
-                                ' with loss:' + str(loss_val.item())[:7] +
-                                ', MSE: ' + str(mse)[:7] +
-                                ' , Pearson Correlation: ' + str(person)[:7] +
-                                ' with p-value: ' + str(p_val)[:7] +
-                                ' Spearman Correlation: ' + str(spearman)[:7] +
-                                ' with p_value: ' + str(s_p_val)[:7] +
-                                ' , Concordance Index: ' + str(CI)[:7])
-                        writer.add_scalar("valid/mse", mse, epo)
-                        writer.add_scalar('valida/rmse', rmse, epo)
-                        writer.add_scalar("valid/pearson_correlation", person, epo)
-                        writer.add_scalar("valid/concordance_index", CI, epo)
-                        writer.add_scalar("valid/Spearman", spearman, epo)
-                        writer.add_scalar("Loss/valid", loss_val.item(), iteration_loss)
-                        if mse < max_MSE:
-                            model_max = copy.deepcopy(self.model)
-                            max_MSE = mse
-                            es = 0
-                        else:
-                            es += 1
-                            print("Counter {} of 5".format(es))
-                            if es > 4:
-                                print("Early stopping with best_mse: ", str(max_MSE)[:7], "and mse for this epoch: ", str(mse)[:7], "...")
-                                break
-                    
-                    if self.config['model_type'] == 'classification':
-                        auc, auprc, f1, loss, logits,_ = self.test(validation_generator, self.model)
-                        lst = ["epoch " + str(epo)] + list(map(float2str,[auc, auprc, f1]))
-                        valid_metric_record.append(lst)
-                        print('Validation at Epoch '+ str(epo + 1) + ', AUROC: ' + str(auc)[:7] + \
-                                ' , AUPRC: ' + str(auprc)[:7] + ' , F1: '+str(f1)[:7] + ' , Cross-entropy Loss: ' + \
-                                str(loss)[:7])
-                        if auc > max_auc:
-                            model_max = copy.deepcopy(self.model)
-                            max_auc = auc
-                            es = 0
-                        else:
-                            es += 1
-                            print("Counter {} of 5".format(es))
-                            if es > 4:
-                                print("Early stopping with best_auc: ", str(max_auc)[:7], "and AUC for this epoch: ", str(auc)[:7], "...")
-                                break
+                
+                    ### regression: MSE, Pearson Correlation, with p-value, Concordance Index
+                    y_true,y_pred, mse, rmse, \
+                    person, p_val, \
+                    spearman, s_p_val, CI,\
+                    loss_val = self.test(validation_generator, self.model)
+                    lst = ["epoch " + str(epo)] + list(map(float2str, [mse, rmse, person, p_val, spearman,
+                                                                    s_p_val, CI]))
+                    valid_metric_record.append(lst)
+                    print('Validation at Epoch ' + str(epo + 1) +
+                            ' with loss:' + str(loss_val.item())[:7] +
+                            ', MSE: ' + str(mse)[:7] +
+                            ' , Pearson Correlation: ' + str(person)[:7] +
+                            ' with p-value: ' + str(p_val)[:7] +
+                            ' Spearman Correlation: ' + str(spearman)[:7] +
+                            ' with p_value: ' + str(s_p_val)[:7] +
+                            ' , Concordance Index: ' + str(CI)[:7])
+                    writer.add_scalar("valid/mse", mse, epo)
+                    writer.add_scalar('valida/rmse', rmse, epo)
+                    writer.add_scalar("valid/pearson_correlation", person, epo)
+                    writer.add_scalar("valid/concordance_index", CI, epo)
+                    writer.add_scalar("valid/Spearman", spearman, epo)
+                    writer.add_scalar("Loss/valid", loss_val.item(), iteration_loss)
+                    if mse < max_MSE:
+                        model_max = copy.deepcopy(self.model)
+                        max_MSE = mse
+                        es = 0
+                    else:
+                        es += 1
+                        print("Counter {} of 5".format(es))
+                        if es > 4:
+                            print("Early stopping with best_mse: ", str(max_MSE)[:7], "and mse for this epoch: ", str(mse)[:7], "...")
+                            break
+
                 table.add_row(lst)
             else:
                 model_max = copy.deepcopy(self.model)
         # load early stopped model
         self.model = model_max
         
+        # make predictions for train
+        train_predictions, _ = self.predict(train_drug, train_loader)
+        train_predictions.to_csv(os.path.join(self.modeldir, "train_predictions.csv"), index=False)
+        
+        # make predictions for test
+        if test_drug is not None:
+            test_predictions, _ = self.predict(test_drug, test_loader)
+            test_predictions.to_csv(os.path.join(self.modeldir, "test_predictions.csv"), index=False)
+        
+        # make predictions for val
         if val_drug is not None:
+            val_predictions, _ = self.predict(val_drug, val_loader)
+            val_predictions.to_csv(os.path.join(self.modeldir, "val_predictions.csv"), index=False)
+
             prettytable_file = os.path.join(self.modeldir, "valid_markdowntable.txt")
             with open(prettytable_file, 'w') as fp:
                 fp.write(table.get_string())
@@ -667,26 +619,17 @@ class TransCDR:
         
         print('******** Go for Testing ********')
         if test_drug is not None:
-            if self.config['model_type'] == 'regression':
-                y_true,y_pred, mse, rmse, \
-                person, p_val, \
-                spearman, s_p_val, CI,\
-                loss_test = self.test(testing_generator, model_max)
-                test_table = PrettyTable(["MSE","RMSE", "Pearson Correlation", "p-value", "spearman","s_p-value","Concordance Index"])
-                test_table.add_row(list(map(float2str, [mse,rmse, person, p_val,spearman, s_p_val, CI])))
-                print('Testing MSE: ' + str(mse) 
-                    + ' , Pearson Correlation: ' + str(person) + ' with p-value: ' + str(f"{p_val:.2E}") 
-                    + ' , Spearman Correlation: ' + str(spearman) + ' with s_p-value: ' + str(f"{s_p_val:.2E}")
-                    + ' , Concordance Index: '+str(CI))
-            
-            if self.config['model_type'] == 'classification':
-                auc, auprc, f1, loss, y_pred,_ = self.test(testing_generator, model_max)
-                test_table = PrettyTable(["AUROC", "AUPRC", "F1"])
-                test_table.add_row(list(map(float2str, [auc, auprc, f1])))
-                print('Validation at Epoch '+ str(epo + 1) + ' , AUROC: ' + str(auc)[:7] + \
-                    ' , AUPRC: ' + str(auprc)[:7] + ' , F1: '+str(f1)[:7] + ' , Cross-entropy Loss: ' + \
-                    str(loss)[:7])
-            
+            y_true,y_pred, mse, rmse, \
+            person, p_val, \
+            spearman, s_p_val, CI,\
+            loss_test = self.test(testing_generator, model_max)
+            test_table = PrettyTable(["MSE","RMSE", "Pearson Correlation", "p-value", "spearman","s_p-value","Concordance Index"])
+            test_table.add_row(list(map(float2str, [mse,rmse, person, p_val,spearman, s_p_val, CI])))
+            print('Testing MSE: ' + str(mse) 
+                + ' , Pearson Correlation: ' + str(person) + ' with p-value: ' + str(f"{p_val:.2E}") 
+                + ' , Spearman Correlation: ' + str(spearman) + ' with s_p-value: ' + str(f"{s_p_val:.2E}")
+                + ' , Concordance Index: '+str(CI))
+
             np.save(os.path.join(self.modeldir, "logits.npy"), np.array(y_pred))
             # att.to_csv(os.path.join(self.modeldir, "attention.csv"))
             prettytable_file = os.path.join(self.modeldir, "test_markdowntable.txt")
@@ -708,30 +651,25 @@ class TransCDR:
         tf = open(os.path.join(self.modeldir, "config.json"), "w")
         json.dump(self.config,tf)
         tf.close()
-                
 
-    def predict(self, drug_data):
+    def predict(self, drug_data, data_loader):
         print('******** predicting... ********')
-        config = self.config
+        prediction_data = drug_data.copy()
         self.model.to(self.device)
-        info = data_process_loader(drug_data.index.values,
-                                   drug_data.Label.values,
-                                   drug_data, **config)
         params = {'batch_size': 16,
                   'shuffle': False,
                   'num_workers': 8,
                   'drop_last': False,
-                  'sampler': SequentialSampler(info)}
-        generator = data.DataLoader(info, **params)
+                  'sampler': SequentialSampler(data_loader)}
+        generator = data.DataLoader(data_loader, **params)
         
-        if self.config['model_type'] == 'regression':
-            y_label, y_pred, mse, rmse, person, p_val, spearman, s_p_val, CI, loss_val = \
-                self.test(generator, self.model)
-            return y_label, y_pred, mse, rmse, person, p_val, spearman, s_p_val, CI
+        y_label, y_pred, mse, rmse, person, p_val, spearman, s_p_val, CI, loss_val = \
+            self.test(generator, self.model)
         
-        if self.config['model_type'] == 'classification':
-            auc, pr,f1,loss,y_pred,y_label = self.test(generator, self.model)
-            return auc, pr,f1,loss,y_pred,y_label
+        prediction_data['Prediction'] = y_pred
+        prediction_data['Residual'] = y_label - y_pred
+        
+        return prediction_data, (mse, rmse, person, p_val, spearman, s_p_val, CI)
 
     def save_model(self):
         torch.save(self.model.state_dict(), self.modeldir + '/model.pt')
@@ -740,7 +678,7 @@ class TransCDR:
         if not os.path.exists(path):
             os.makedirs(path)
 
-        if self.device == 'cuda':
+        if 'cuda' in self.condig["device"]:
             state_dict = torch.load(path)
         else:
             state_dict = torch.load(path, map_location=torch.device('cpu'))
@@ -755,11 +693,3 @@ class TransCDR:
             state_dict = new_state_dict
 
         self.model.load_state_dict(state_dict)
-
-
-
-
-
-
-
-

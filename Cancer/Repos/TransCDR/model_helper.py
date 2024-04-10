@@ -7,7 +7,7 @@ import numpy as np
 import copy
 import math
 import collections
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0')
 
 torch.manual_seed(1)
 np.random.seed(1)

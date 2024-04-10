@@ -19,8 +19,8 @@ class DataEncoding:
     def _drug2emb_encoder(self,smile):
         '''get the token and mask of drugs'''
         
-        vocab_path = './data/ESPF/drug_codes_chembl_freq_1500.txt'
-        sub_csv = pd.read_csv('./data/ESPF/subword_units_map_chembl_freq_1500.csv')
+        vocab_path = './ESPF/drug_codes_chembl_freq_1500.txt'
+        sub_csv = pd.read_csv('./ESPF/subword_units_map_chembl_freq_1500.csv')
 
         bpe_codes_drug = codecs.open(vocab_path)
         dbpe = BPE(bpe_codes_drug, merges=-1, separator='')
@@ -45,36 +45,39 @@ class DataEncoding:
 
         return i, np.asarray(input_mask)
 
-    def encode(self,traindata,testdata,valdata,**config):
+    def encode(self,traindata,testdata,valdata):
+        cell_info = pd.read_csv("../../Data/processed/cell_info.csv")
+        cell_info = cell_info.rename(columns={"cell_type":"cell_line"})
         # prepare data
-        drug_smiles = pd.read_csv('./data/GDSC/data_processed/CDR_n174725.txt',sep='\t')
+        drug_smiles = pd.concat([traindata, testdata, valdata], axis=0)
         smile_encode = pd.Series(drug_smiles['smiles'].unique()).apply(self._drug2emb_encoder)
         uniq_smile_dict = dict(zip(drug_smiles['smiles'].unique(),smile_encode))
         if (testdata is not None) & (valdata is not None):
             traindata['drug_encoding'] = [uniq_smile_dict[i] for i in traindata['smiles']]
             testdata['drug_encoding'] = [uniq_smile_dict[i] for i in testdata['smiles']]
             valdata['drug_encoding'] = [uniq_smile_dict[i] for i in valdata['smiles']]
+            if self.config['conformal_prediction'] == 'True':
+                data_label = 'error'
+            else:
+                data_label = 'pIC50'
+                
+            traindata = pd.merge(traindata, cell_info, how='left', on='cell_line')
+            testdata = pd.merge(testdata, cell_info, how='left', on='cell_line')
+            valdata = pd.merge(valdata, cell_info, how='left', on='cell_line')
+            
             traindata = traindata.reset_index()
-            if self.config['model_type'] =='regression':
-                traindata['Label'] = traindata['lnIC50']
-                testdata = testdata.reset_index()
-                testdata['Label'] = testdata['lnIC50']
-                valdata = valdata.reset_index()
-                valdata['Label'] = valdata['lnIC50']
-
-            if self.config['model_type'] =='classification':
-                traindata['Label'] = traindata['Label']
-                testdata = testdata.reset_index()
-                testdata['Label'] = testdata['Label']
-                valdata = valdata.reset_index()
-                valdata['Label'] = valdata['Label']
-            return traindata, testdata,valdata
+            testdata = testdata.reset_index()
+            valdata = valdata.reset_index()
+            
+            traindata = traindata.rename(columns={data_label:'Label'})
+            testdata = testdata.rename(columns={data_label:'Label'})
+            valdata = valdata.rename(columns={data_label:'Label'})
+            
+            columns = ["index", "cell_line", "assay_name", "COSMIC_ID", "smiles", "drug_encoding", "Label"]
+            traindata = traindata[columns]
+            testdata = testdata[columns]
+            valdata = valdata[columns]
+            
+            return traindata, testdata, valdata
         else:
-            traindata['drug_encoding'] = [uniq_smile_dict[i] for i in traindata['smiles']]
-            traindata = traindata.reset_index()
-            if self.config['model_type'] =='regression':
-                traindata['Label'] = traindata['lnIC50']
-
-            if self.config['model_type'] =='classification':
-                traindata['Label'] = traindata['Label']
-            return traindata
+            raise('Missing data.')

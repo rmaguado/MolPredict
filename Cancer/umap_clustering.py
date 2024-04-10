@@ -43,7 +43,6 @@ def get_mfp(df_smiles):
     return df_mfp, fingerprints1
 
 def assign_cluster_id(df_data, cluster_id):
-    print('\nAssign cluster ID')
     df_data['Cluster_ID'] = cluster_id.labels_
     return df_data
 
