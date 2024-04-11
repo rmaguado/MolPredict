@@ -49,13 +49,13 @@ class DataEncoding:
         cell_info = pd.read_csv("../../Data/processed/cell_info.csv")
         cell_info = cell_info.rename(columns={"cell_type":"cell_line"})
         # prepare data
-        drug_smiles = pd.concat([traindata, testdata, valdata], axis=0)
-        smile_encode = pd.Series(drug_smiles['smiles'].unique()).apply(self._drug2emb_encoder)
-        uniq_smile_dict = dict(zip(drug_smiles['smiles'].unique(),smile_encode))
+        #drug_smiles = pd.concat([traindata, testdata, valdata], axis=0)
+        #smile_encode = pd.Series(drug_smiles['smiles'].unique()).apply(self._drug2emb_encoder)
+        #uniq_smile_dict = dict(zip(drug_smiles['smiles'].unique(),smile_encode))
         if (testdata is not None) & (valdata is not None):
-            traindata['drug_encoding'] = [uniq_smile_dict[i] for i in traindata['smiles']]
-            testdata['drug_encoding'] = [uniq_smile_dict[i] for i in testdata['smiles']]
-            valdata['drug_encoding'] = [uniq_smile_dict[i] for i in valdata['smiles']]
+            #traindata['drug_encoding'] = [uniq_smile_dict[i] for i in traindata['smiles']]
+            #testdata['drug_encoding'] = [uniq_smile_dict[i] for i in testdata['smiles']]
+            #valdata['drug_encoding'] = [uniq_smile_dict[i] for i in valdata['smiles']]
             if self.config['conformal_prediction'] == 'True':
                 traindata = traindata.drop(columns={"Label"})
                 testdata = testdata.drop(columns={"Label"})
@@ -76,7 +76,7 @@ class DataEncoding:
             testdata = testdata.rename(columns={data_label:'Label'})
             valdata = valdata.rename(columns={data_label:'Label'})
             
-            columns = ["index", "cell_line", "assay_name", "COSMIC_ID", "smiles", "drug_encoding", "Label"]
+            columns = ["index", "cell_line", "assay_name", "COSMIC_ID", "smiles", "Label"]
             traindata = traindata[columns]
             testdata = testdata[columns]
             valdata = valdata[columns]

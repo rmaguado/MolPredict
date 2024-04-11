@@ -2,10 +2,7 @@ import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem, SaltRemover
 from rdkit import RDLogger
-from rdkit import Chem
-from rdkit.Chem import SaltRemover
 from molvs import Standardizer
-from rdkit.Chem import AllChem
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
 import warnings

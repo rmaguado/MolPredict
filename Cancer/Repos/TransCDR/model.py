@@ -27,23 +27,23 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import SequentialSampler
 from dgllife.utils import mol_to_bigraph, PretrainAtomFeaturizer, PretrainBondFeaturizer
-from rdkit import Chem,DataStructs
-from rdkit.Chem import AllChem
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem, SaltRemover
+from molvs import Standardizer
 from prettytable import PrettyTable
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from dgllife.model import load_pretrained
 from dgl.nn.pytorch.glob import AvgPooling
 from transformers import AutoModel
 #import sys
 #sys.path.append('./code/cross_att_clas_regr')
-from model_helper import Encoder,Decoder,CNN,RNN,Transformer,GCN_encoder,NeuralFP, AttentiveFP
+from model_helper import Encoder
 from drug_bert_model import LigandTokenizer, embed_ligand
 
 from transformers import logging
 logging.set_verbosity_error()
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 # get sequence feats with pre-trained BERT model
 def get_sequence_feats(drug_df,**config):
@@ -53,8 +53,10 @@ def get_sequence_feats(drug_df,**config):
     lig_embedder.eval()
     embedded_drug = {}
     smiles_list = pd.Series(drug_df['smiles'].unique())
+    print("Getting llm features...")
     for smiles in tqdm(smiles_list):
-        embedded_drug[smiles] = embed_ligand(smiles, chem_tokenizer, lig_embedder)  
+        embedded_drug[smiles] = embed_ligand(smiles, chem_tokenizer, lig_embedder)
+    print("Done.")
     return embedded_drug
 
 
@@ -67,6 +69,7 @@ def get_graph_feats(drug_df,**config):
     model_drug.to(device)
     embedded_drug = {}
     smiles_list = pd.Series(drug_df['smiles'].unique())
+    print("Getting graph features...")
     for smiles in tqdm(smiles_list):
         v_D = mol_to_bigraph(Chem.MolFromSmiles(smiles), add_self_loop=True,
                                                     node_featurizer=PretrainAtomFeaturizer(),
@@ -79,11 +82,12 @@ def get_graph_feats(drug_df,**config):
                 v_D.edata.pop('bond_direction_type').to(device)]
         node_repr = model_drug(v_D, nfeats, efeats)
         v_D = readout(v_D, node_repr)
-        embedded_drug[smiles] = v_D.detach().cpu().numpy().flatten()   
+        embedded_drug[smiles] = v_D.detach().cpu().numpy().flatten()
+    print("Done.")
     return embedded_drug
 
 # get ECFP feats
-def smiles2morgan(smiles, radius = 2, nBits = 1024):
+def smiles2morgan(smiles, radius=2, nBits=1024):
     try:
         mol = Chem.MolFromSmiles(smiles)
         features_vec = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
@@ -91,14 +95,16 @@ def smiles2morgan(smiles, radius = 2, nBits = 1024):
         DataStructs.ConvertToNumpyArray(features_vec, features)
     except:
         print('rdkit not found this smiles for morgan: ' + smiles + ' convert to all 0 features')
-        features = np.zeros((nBits, )) 
+        features = np.zeros((nBits, ))
     return features
 
 def get_FP_feats(drug_df,**config):
+    print("Getting fingerprints...")
     embedded_drug = {}
     smiles_list = pd.Series(drug_df['smiles'].unique())
     for smiles in tqdm(smiles_list):
-        embedded_drug[smiles] = smiles2morgan(smiles, radius = 2, nBits = 1024)   
+        embedded_drug[smiles] = smiles2morgan(smiles, radius = 2, nBits = 1024)
+    print("Done.")
     return embedded_drug
 
 
@@ -169,14 +175,6 @@ def get_transformer_feats(drug_df):
 def get_GNN_feats(drug_df,**config):
     from dgllife.utils import smiles_to_bigraph, CanonicalAtomFeaturizer, CanonicalBondFeaturizer,AttentiveFPAtomFeaturizer,AttentiveFPBondFeaturizer
     from functools import partial
-    if config['drug_encoder'] in ['GCN', 'NeuralFP']:
-        node_featurizer = CanonicalAtomFeaturizer()
-        edge_featurizer = CanonicalBondFeaturizer(self_loop = True)
-        fc = partial(smiles_to_bigraph, add_self_loop=True)
-    if config['drug_encoder'] == 'AttentiveFP':
-        node_featurizer = AttentiveFPAtomFeaturizer()
-        edge_featurizer = AttentiveFPBondFeaturizer(self_loop=True)
-        fc = partial(smiles_to_bigraph, add_self_loop=True)
     smiles_list = pd.Series(drug_df['smiles'].unique())
     embedded_drug = {}
     for smiles in tqdm(smiles_list): 
@@ -192,25 +190,21 @@ class data_process_loader(data.Dataset):
         self.list_IDs = list_IDs
         self.drug_df = drug_df
         
-        if self.config['external_dataset'] == 'None':
-            self.rna_data = pd.read_csv('../../Data/processed/methylation.csv', index_col=0)
-            self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
-            self.rna_data = self.rna_data.T
-            self.genetic = pd.read_csv('../../Data/processed/genetic.csv',index_col=0)
-            self.mrna = pd.read_csv('../../Data/processed/expression.csv',index_col=0)
-            self.mrna = self.mrna.T
+        self.rna_data = pd.read_csv('../../Data/processed/methylation.csv', index_col=0)
+        self.rna_data.columns = [name.split('.')[0][1:] for name in self.rna_data.columns.values]
+        self.rna_data = self.rna_data.T
+        self.genetic = pd.read_csv('../../Data/processed/genetic.csv',index_col=0)
+        self.mrna = pd.read_csv('../../Data/processed/expression.csv',index_col=0)
+        self.mrna = self.mrna.T
         
-        if self.config['pre_train']:
+        self.drug_encodings = self.config['drug_model'].split(' + ')
+
+        if 'sequence' in self.drug_encodings:
             self.embedded_drug1 = get_sequence_feats(drug_df, **self.config)
+        if 'graph' in self.drug_encodings:
             self.embedded_drug2 = get_graph_feats(drug_df, **self.config)
+        if 'FP' in self.drug_encodings:
             self.embedded_drug3 = get_FP_feats(drug_df, **self.config)
-        else:
-            if (self.config['drug_encoder'] == 'CNN') | (self.config['drug_encoder'] == 'RNN'):
-                self.embedded_drug = drug_2_embed(drug_df)
-            if self.config['drug_encoder'] == 'Transformer':
-                self.embedded_drug,self.mask = get_transformer_feats(drug_df)
-            if self.config['drug_encoder'] in ['GCN','NeuralFP','AttentiveFP']:
-                self.embedded_drug = get_GNN_feats(drug_df,**self.config)
 
     def __len__(self):
         'Denotes the total number of samples'
@@ -221,24 +215,18 @@ class data_process_loader(data.Dataset):
         index = self.list_IDs[index]
         y = self.labels[index]
         
-        if self.config['external_dataset'] == 'None':
-            v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['assay_name'],:])
-            v_genetic = np.array(self.genetic.loc[int(self.drug_df.iloc[index]['COSMIC_ID']),:])
-            v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_line'],:])
-        
-        if self.config['pre_train']:
-            v_d1 = self.embedded_drug1[self.drug_df.iloc[index]['smiles']]
-            v_d2 = self.embedded_drug2[self.drug_df.iloc[index]['smiles']]
-            v_d3 = self.embedded_drug3[self.drug_df.iloc[index]['smiles']]
-            return v_d1,v_d2,v_d3, v_rna, v_genetic, v_mrna, y
-        else:
-            if self.config['drug_encoder'] in ['CNN','RNN','GCN','NeuralFP','AttentiveFP']:
-                v_d = self.embedded_drug[self.drug_df.iloc[index]['smiles']]
-                return v_d,v_rna, v_genetic, v_mrna, y
-            if self.config['drug_encoder'] == 'Transformer':
-                v_d = self.embedded_drug[self.drug_df.iloc[index]['smiles']]
-                mask = self.mask[self.drug_df.iloc[index]['smiles']]
-                return (v_d,mask),v_rna, v_genetic, v_mrna, y
+        v_rna = np.array(self.rna_data.loc[self.drug_df.iloc[index]['assay_name'],:])
+        v_genetic = np.array(self.genetic.loc[int(self.drug_df.iloc[index]['COSMIC_ID']),:])
+        v_mrna = np.array(self.mrna.loc[self.drug_df.iloc[index]['cell_line'],:])
+    
+        v_d = []
+        if 'sequence' in self.drug_encodings:
+            v_d.append(self.embedded_drug1[self.drug_df.iloc[index]['smiles']])
+        if 'graph' in self.drug_encodings:
+            v_d.append(self.embedded_drug2[self.drug_df.iloc[index]['smiles']])
+        if 'FP' in self.drug_encodings:
+            v_d.append(self.embedded_drug3[self.drug_df.iloc[index]['smiles']])
+        return tuple(v_d), v_rna, v_genetic, v_mrna, y
 
 class MLP(nn.Sequential):
     def __init__(self,input_dim_gene, device):
@@ -249,7 +237,7 @@ class MLP(nn.Sequential):
         super(MLP, self).__init__()
         layer_size = len(mlp_hidden_dims_gene) + 1
         dims = [self.input_dim_gene] + mlp_hidden_dims_gene + [hidden_dim_gene]
-        self.predictor = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(layer_size)])
+        self.predictor = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]).to(device) for i in range(layer_size)])
     def forward(self, v):
         # predict
         v = v.float().to(self.device)
@@ -263,55 +251,30 @@ class Classifier(nn.Sequential):
         super(Classifier, self).__init__()
         self.config = config
         self.device = torch.device(config["device"])
-        
-        # pretrained models
-        self.model_seq = MLP(768, self.device)
-        self.model_graph = MLP(300, self.device)
-        self.model_fp = MLP(1024, self.device)
 
         # cell line model
         self.model_rna = MLP(self.config['input_dim_rna'], self.device)
         self.model_genetic = MLP(self.config['input_dim_genetic'], self.device)
         self.model_mrna = MLP(self.config['input_dim_mrna'], self.device)
 
-        # drug_encoder
-        if self.config['drug_encoder'] == 'CNN':
-            self.drug_model = CNN()
-        
-        if self.config['drug_encoder'] == 'RNN':
-            self.drug_model = RNN()
-        
-        if self.config['drug_encoder'] == 'Transformer':
-            self.drug_model = Transformer()
-        
-        if self.config['drug_encoder'] == 'GCN':
-            self.drug_model = GCN_encoder()
-        
-        if self.config['drug_encoder'] == 'NeuralFP':
-            self.drug_model = NeuralFP()
-        
-        if self.config['drug_encoder'] == 'AttentiveFP':
-            self.drug_model = AttentiveFP()
-        # fusion
-        # self.fusion = MultiHeadAttention(256, 8)
-        # self.fusion = Encoder(256, 256, 8, 4, 0.1, device)
-        if self.config['fusion_type'] =='encoder':
-            self.fusion = Encoder(256, 256, 8, 6, 0.1, self.device)
-        
-        if self.config['fusion_type'] =='decoder':
-            self.fusion = Decoder(256,256, 256, 8, 6, 0.1, self.device)
-            
+        self.drug_encodings = self.config['drug_model'].split(' + ')
+        # pretrained models
+        self.drug_models = []
+        if 'sequence' in self.drug_encodings:
+            self.drug_models.append(MLP(768, self.device))
+        if 'graph' in self.drug_encodings:
+            self.drug_models.append(MLP(300, self.device))
+        if 'FP' in self.drug_encodings:
+            self.drug_models.append(MLP(1024, self.device))
+
         self.hidden_dims =  [1024, 1024, 512]
-        if self.config['pre_train']:
-            if self.config['fusion_type'] =='decoder':
-                dims = [256*3] + self.hidden_dims + [1]
-            else:
-                n_drug = len(self.config['drug_model'].split(' + '))
-                n_omics = len(self.config['omics'].split(' + '))
-                n = n_drug + n_omics
-                dims = [256*n] + self.hidden_dims + [1]
-        else:
-            dims = [256*4] + self.hidden_dims + [1]
+        
+        n_drug = len(self.config['drug_model'].split(' + '))
+        n_omics = len(self.config['omics'].split(' + '))
+        n = n_drug + n_omics
+        dims = [256*n] + self.hidden_dims + [1]
+
+        self.fusion = Encoder(256, 256, 8, 6, 0.1, self.device)
         
         self.dropout = nn.Dropout(0.1)
         layer_size = len(self.hidden_dims) + 1
@@ -321,108 +284,23 @@ class Classifier(nn.Sequential):
         # label
         label = v[-1]
 
-        if self.config['pre_train']:
-            if self.config['fusion_type'] in ['encoder','decoder']:
-                # drug
-                v_seq = v[0].to(self.device)
-                v_seq = self.model_seq(v_seq)
-                v_graph = v[1].to(self.device)
-                v_graph = self.model_graph(v_graph)
-                v_fp = v[2].to(self.device)
-                v_fp = self.model_fp(v_fp)
-                # unsquence
-                v_seq = v_seq.unsqueeze(1)
-                v_graph = v_graph.unsqueeze(1)
-                v_fp = v_fp.unsqueeze(1)
+        # cell line
+        v_rna = self.model_rna(v[1])
+        v_genetic = self.model_genetic(v[2])
+        v_mrna = self.model_mrna(v[3])
 
-                # cell line
-                v_rna = self.model_rna(v[3])
-                v_genetic = self.model_genetic(v[4])
-                v_mrna = self.model_mrna(v[5])
-                # unsqueeze
-                v_rna = v_rna.unsqueeze(1)
-                v_genetic = v_genetic.unsqueeze(1)
-                v_mrna = v_mrna.unsqueeze(1)
-            else:
-                #  drug
-                v_seq = v[0].to(self.device)
-                v_seq = self.model_seq(v_seq)
-                v_graph = v[1].to(self.device)
-                v_graph = self.model_graph(v_graph)
-                v_fp = v[2].to(self.device)
-                v_fp = self.model_fp(v_fp)
-                
-                # cell line
-                v_rna = self.model_rna(v[3])
-                v_genetic = self.model_genetic(v[4])
-                v_mrna = self.model_mrna(v[5])
+        # unsqueeze
+        v_rna = v_rna.unsqueeze(1)
+        v_genetic = v_genetic.unsqueeze(1)
+        v_mrna = v_mrna.unsqueeze(1)
 
-            if self.config['drug_model'] == 'sequence + graph + FP':
-                v_D = torch.cat((v_seq,v_graph,v_fp),1)
-            if self.config['drug_model'] == 'sequence + graph':
-                v_D = torch.cat((v_seq,v_graph),1)
-            if self.config['drug_model'] == 'sequence + FP':
-                v_D = torch.cat((v_seq,v_fp),1)
-            if self.config['drug_model'] == 'graph + FP':
-                v_D = torch.cat((v_graph,v_fp),1)
-            if self.config['drug_model'] == 'sequence':
-                v_D = v_seq
-            if self.config['drug_model'] == 'graph':
-                v_D = v_graph
-            if self.config['drug_model'] == 'FP':
-                v_D = v_fp
-            if self.config['omics'] == 'expr + mutation + methylation':
-                v_cell = torch.cat((v_rna, v_genetic, v_mrna), 1)
-            if self.config['omics'] == 'expr + mutation':
-                v_cell = torch.cat((v_rna, v_genetic), 1)
-            if self.config['omics'] == 'expr + methylation':
-                v_cell = torch.cat((v_rna, v_mrna), 1)
-            if self.config['omics'] == 'mutation + methylation':
-                v_cell = torch.cat((v_genetic, v_mrna), 1)
-            if self.config['omics'] == 'expr':
-                v_cell = v_rna
-            if self.config['omics'] == 'mutation':
-                v_cell = v_genetic
-            if self.config['omics'] == 'methylation':
-                v_cell = v_mrna
-        else:
-            # cell line
-            v_rna = self.model_rna(v[1])
-            v_genetic = self.model_genetic(v[2])
-            v_mrna = self.model_mrna(v[3])
+        v_cell = torch.cat((v_rna, v_genetic, v_mrna), 1)
 
-            # unsqueeze
-            v_rna = v_rna.unsqueeze(1)
-            v_genetic = v_genetic.unsqueeze(1)
-            v_mrna = v_mrna.unsqueeze(1)
+        v_D = torch.cat([model(v_).unsqueeze(1) for model, v_ in zip(self.drug_models, v[0])], dim=1)
 
-            v_cell = torch.cat((v_rna, v_genetic, v_mrna), 1)
-
-            if self.config['drug_encoder'] in ['CNN','RNN','GCN','NeuralFP','AttentiveFP']:
-                # drug 
-                v_D = v[0].to(self.device)
-                v_D = self.drug_model(v_D)
-                v_D = v_D.unsqueeze(1)
-            
-            if self.config['drug_encoder'] == 'Transformer':
-                v_D = v[0]
-                v_D = v_D[0].to(self.device)
-                mask = v_D[1].to(self.device)
-                v_D = self.drug_model(v_D,mask)
-                v_D = v_D.unsqueeze(1)
-        
-        if self.config['fusion_type'] =='decoder':
-            # v_f = self.fusion(v_cell,v_D,None,None)
-            v_f = self.fusion(v_D,v_cell,None,None)
-            v_f = v_f.view(-1, v_f.shape[1] * v_f.shape[2])
-
-        if self.config['fusion_type'] =='encoder':
-            v_f = torch.cat((v_D, v_cell), 1) 
-            v_f = self.fusion(v_f,None)
-            # v_f = v_f[:,0]
-            v_f = v_f.view(-1, v_f.shape[1] * v_f.shape[2])
-        if self.config['fusion_type'] =='concat':
-            v_f = torch.cat((v_D, v_cell), 1)
+        v_f = torch.cat((v_D, v_cell), 1)
+        v_f = self.fusion(v_f, None)
+        v_f = v_f.view(-1, v_f.shape[1] * v_f.shape[2])
 
         for i, l in enumerate(self.predictor):
             if i == (len(self.predictor) - 1):
@@ -430,7 +308,6 @@ class Classifier(nn.Sequential):
             else:
                 v_f = F.relu(self.dropout(l(v_f)))
         return v_f, label
-
 
 def dgl_collate_func(x):
     d, v1,v2,v3, y = zip(*x)
@@ -483,7 +360,7 @@ class TransCDR:
     def train(self, train_drug, test_drug, val_drug):
         lr = self.config['lr']
         decay = self.config['decay']
-        BATCH_SIZE = self.config['BATCH_SIZE']
+        batch_size = self.config['batch_size']
         train_epoch = self.config['train_epoch']
         self.model = self.model.to(self.device)
         # self.model = torch.nn.DataParallel(self.model, device_ids=[0, 5])
@@ -491,13 +368,11 @@ class TransCDR:
         loss_history = []
         
         print('******** data preparing ********')
-        params = {'batch_size': BATCH_SIZE,
+        params = {'batch_size': batch_size,
                 'shuffle': True,
                 'num_workers': 0,
                 'drop_last': False,
                 }
-        if self.config['drug_encoder'] in ['GCN','NeuralFP','AttentiveFP']:
-            params['collate_fn'] = dgl_collate_func
 
         train_loader = data_process_loader(
             train_drug.index.values, train_drug.Label.values, train_drug,
@@ -637,14 +512,6 @@ class TransCDR:
             with open(prettytable_file, 'w') as fp:
                 fp.write(test_table.get_string())
 
-        print('******** plot learning curve ********')
-        fontsize = 16
-        iter_num = list(range(1,len(loss_history)+1))
-        plt.figure(dpi=600)
-        plt.plot(iter_num, loss_history, 'bo-')
-        plt.xlabel('iteration', fontsize = fontsize)
-        plt.ylabel('loss value', fontsize = fontsize)
-        plt.savefig(os.path.join(self.modeldir, "loss_curve.png"))
         print('******** Training Finished ********')
         writer.flush()
         writer.close()
@@ -656,7 +523,7 @@ class TransCDR:
     def predict(self, drug_data, data_loader):
         prediction_data = drug_data.copy()
         self.model.to(self.device)
-        params = {'batch_size': self.config['BATCH_SIZE'],
+        params = {'batch_size': self.config['batch_size'],
                   'shuffle': False,
                   'num_workers': 8,
                   'drop_last': False,
