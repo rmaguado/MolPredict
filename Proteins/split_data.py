@@ -1,18 +1,16 @@
 import os
+import pandas as pd
+import numpy as np
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-
-import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
 from rdkit import RDLogger
-from sklearn.model_selection import train_test_split, GroupKFold
-
+from sklearn.model_selection import train_test_split, GroupKFold, KFold
 from tqdm import tqdm
-
 from scipy.cluster.hierarchy import linkage, fcluster
-import numpy as np
-from sklearn.model_selection import KFold
+
+from utils import save
 
 RESULT_PATH = "DataSplits/"
 PDBBIND_PATH = "Data/PDBBindv2020/"
@@ -79,7 +77,8 @@ def cluster_by_protein_similarity(df: pd.DataFrame):
     similarity_matrix = np.zeros((num_proteins, num_proteins))
 
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(tqdm(executor.map(run_mmalign, pairs), total=len(pairs), desc="Calculating protein similarities"))
+        results = list(
+            tqdm(executor.map(run_mmalign, pairs), total=len(pairs), desc="Calculating protein similarities"))
 
     for i, j, score in results:
         if score is not None:
@@ -119,22 +118,6 @@ def custom_cluster_split(df, test_size=0.1, random_state=None, column_title="lig
     test_set = df[df[column_title].isin(test_clusters)]
 
     return train_set, test_set
-
-
-def save(output_folder, train: pd.DataFrame, test: pd.DataFrame, val: pd.DataFrame):
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-    file_paths = [
-        os.path.join(output_folder, f'{item}.csv') for item in ['train', 'test', 'val']
-    ]
-
-    train = train.drop_duplicates(ignore_index=True)
-    test = test.drop_duplicates(ignore_index=True)
-    val = val.drop_duplicates(ignore_index=True)
-
-    train.name.to_csv(file_paths[0], index=False, header=False)
-    test.name.to_csv(file_paths[1], index=False, header=False)
-    val.name.to_csv(file_paths[2], index=False, header=False)
 
 
 def save_similarity_matrix(similarity_matrix, names, save_path):
